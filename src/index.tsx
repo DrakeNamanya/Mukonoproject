@@ -340,7 +340,8 @@ function buildExportData(records: any[]) {
       'Training Type': r['skills_capacity/training_type'] || '',
       'Support Types Needed': (r['support_resources/support_types'] || '').split(' ').map((v: string) => LABELS.support_types[v] || v).filter((v: string) => v).join(', '),
       'Government Role Perception': LABELS.gov_role[r['support_resources/gov_role']] || r['support_resources/gov_role'] || '',
-      'Additional Comments': r['additional_comments/comments'] || ''
+      'Additional Comments': r['additional_comments/comments'] || '',
+      'Submitted By': r['_submitted_by'] || r['_status'] || ''
     }
   })
 }
@@ -456,7 +457,8 @@ app.get('/api/stats', async (c) => {
         type: r['gen_info/business_type'] || 'N/A',
         employees: LABELS.employees[r['gen_info/employees']] || r['gen_info/employees'] || 'N/A',
         years: LABELS.years_operation[r['gen_info/years_operation']] || r['gen_info/years_operation'] || 'N/A',
-        submitted: r['_submission_time'] || ''
+        submitted: r['_submission_time'] || '',
+        submitted_by: r['_submitted_by'] || r['_status'] || 'N/A'
       })),
       // Data quality summary for KPI
       data_quality: {
@@ -490,6 +492,7 @@ function dashboardHTML() {
   <script src="https://cdn.tailwindcss.com"></script>
   <link href="https://cdn.jsdelivr.net/npm/@fortawesome/fontawesome-free@6.4.0/css/all.min.css" rel="stylesheet">
   <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/chartjs-plugin-datalabels@2.2.0/dist/chartjs-plugin-datalabels.min.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js"></script>
   <style>
     @import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&display=swap');
@@ -884,6 +887,7 @@ function dashboardHTML() {
                 <th class="text-left py-3 px-4 font-semibold text-gray-600">Employees</th>
                 <th class="text-left py-3 px-4 font-semibold text-gray-600">Years</th>
                 <th class="text-left py-3 px-4 font-semibold text-gray-600">Submitted</th>
+                <th class="text-left py-3 px-4 font-semibold text-gray-600">Submitted By</th>
               </tr>
             </thead>
             <tbody id="responses-table"></tbody>
@@ -903,6 +907,9 @@ function dashboardHTML() {
   </main>
 
   <script>
+    // ==================== REGISTER DATALABELS PLUGIN ====================
+    Chart.register(ChartDataLabels);
+
     // ==================== GLOBAL STATE ====================
     let charts = {};
     let currentStats = null;
@@ -1020,7 +1027,17 @@ function dashboardHTML() {
           indexAxis: horizontal ? 'y' : 'x',
           responsive: true,
           maintainAspectRatio: false,
-          plugins: { legend: { display: false }, tooltip: { padding: 10, cornerRadius: 8 } },
+          plugins: {
+            legend: { display: false },
+            tooltip: { padding: 10, cornerRadius: 8 },
+            datalabels: {
+              anchor: horizontal ? 'end' : 'end',
+              align: horizontal ? 'right' : 'top',
+              color: '#374151',
+              font: { size: 11, weight: 'bold' },
+              formatter: (v) => v > 0 ? v : ''
+            }
+          },
           scales: {
             x: { grid: { display: !horizontal }, ticks: { font: { size: 11 } } },
             y: { grid: { display: horizontal }, ticks: { font: { size: 11 }, precision: 0 }, beginAtZero: true }
@@ -1033,6 +1050,7 @@ function dashboardHTML() {
       destroyChart(id);
       const labels = Object.keys(data);
       const values = Object.values(data);
+      const total = values.reduce((a, b) => a + b, 0);
       charts[id] = new Chart(document.getElementById(id), {
         type: 'doughnut',
         data: {
@@ -1051,7 +1069,13 @@ function dashboardHTML() {
           cutout: '55%',
           plugins: {
             legend: { position: 'right', labels: { boxWidth: 12, padding: 12, font: { size: 11 } } },
-            tooltip: { padding: 10, cornerRadius: 8 }
+            tooltip: { padding: 10, cornerRadius: 8 },
+            datalabels: {
+              color: '#fff',
+              font: { size: 11, weight: 'bold' },
+              formatter: (v) => { if (v === 0 || total === 0) return ''; return v + ' (' + Math.round(v/total*100) + '%)'; },
+              display: (ctx) => ctx.dataset.data[ctx.dataIndex] > 0
+            }
           }
         }
       });
@@ -1080,7 +1104,17 @@ function dashboardHTML() {
         },
         options: {
           responsive: true, maintainAspectRatio: false,
-          plugins: { legend: { labels: { boxWidth: 12, padding: 12, font: { size: 11 } } }, tooltip: { padding: 10, cornerRadius: 8 } },
+          plugins: {
+            legend: { labels: { boxWidth: 12, padding: 12, font: { size: 11 } } },
+            tooltip: { padding: 10, cornerRadius: 8 },
+            datalabels: {
+              color: (ctx) => ctx.datasetIndex === 0 ? '#2563eb' : '#059669',
+              anchor: 'end', align: 'top',
+              font: { size: 10, weight: 'bold' },
+              formatter: (v) => v > 0 ? v : '',
+              display: (ctx) => ctx.datasetIndex === 0
+            }
+          },
           scales: { x: { ticks: { font: { size: 10 } } }, y: { beginAtZero: true, ticks: { precision: 0, font: { size: 11 } } } }
         }
       });
@@ -1095,7 +1129,15 @@ function dashboardHTML() {
         data: { labels, datasets: [{ data: values, backgroundColor: COLORS.bg.slice(0, labels.length), borderColor: COLORS.primary.slice(0, labels.length), borderWidth: 2 }] },
         options: {
           responsive: true, maintainAspectRatio: false,
-          plugins: { legend: { position: 'right', labels: { boxWidth: 12, padding: 10, font: { size: 11 } } }, tooltip: { padding: 10, cornerRadius: 8 } },
+          plugins: {
+            legend: { position: 'right', labels: { boxWidth: 12, padding: 10, font: { size: 11 } } },
+            tooltip: { padding: 10, cornerRadius: 8 },
+            datalabels: {
+              color: '#374151',
+              font: { size: 11, weight: 'bold' },
+              formatter: (v) => v > 0 ? v : ''
+            }
+          },
           scales: { r: { ticks: { precision: 0, stepSize: 1 } } }
         }
       });
@@ -1110,7 +1152,16 @@ function dashboardHTML() {
         data: { labels, datasets: [{ label: 'Responses', data: values, backgroundColor: 'rgba(37,99,235,0.15)', borderColor: '#2563eb', borderWidth: 2, pointBackgroundColor: '#2563eb', pointRadius: 4 }] },
         options: {
           responsive: true, maintainAspectRatio: false,
-          plugins: { legend: { display: false }, tooltip: { padding: 10, cornerRadius: 8 } },
+          plugins: {
+            legend: { display: false },
+            tooltip: { padding: 10, cornerRadius: 8 },
+            datalabels: {
+              color: '#2563eb',
+              font: { size: 11, weight: 'bold' },
+              anchor: 'end', align: 'end',
+              formatter: (v) => v > 0 ? v : ''
+            }
+          },
           scales: { r: { beginAtZero: true, ticks: { precision: 0, stepSize: 1 }, pointLabels: { font: { size: 11 } } } }
         }
       });
@@ -1198,6 +1249,7 @@ function dashboardHTML() {
             '<td class="py-3 px-4 text-gray-600">' + escapeHtml(b.employees) + '</td>' +
             '<td class="py-3 px-4 text-gray-600">' + escapeHtml(b.years) + '</td>' +
             '<td class="py-3 px-4 text-gray-400 text-xs">' + (b.submitted ? new Date(b.submitted).toLocaleDateString() : '-') + '</td>' +
+            '<td class="py-3 px-4 text-gray-600 text-xs"><span class="bg-purple-100 text-purple-700 px-2 py-0.5 rounded-full text-xs font-medium">' + escapeHtml(b.submitted_by) + '</span></td>' +
           '</tr>'
         ).join('');
       }
