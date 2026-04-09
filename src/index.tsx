@@ -12,10 +12,10 @@ type Bindings = {
 const app = new Hono<{ Bindings: Bindings }>()
 app.use('/api/*', cors())
 
-// ==================== COMPLETE LABEL MAPPINGS (from form XML) ====================
+// ==================== COMPLETE LABEL MAPPINGS (v4 form XML) ====================
 const L: Record<string, Record<string, string>> = {
   yes_no: { yes:'Yes', no:'No' },
-  legal_status: { sole_proprietorship:'Sole Proprietorship', partnership:'Partnership', limited_private:'Limited Company (Private)', limited_public:'Limited Company (Public)', cooperative:'Cooperative', cbo:'CBO', informal:'Informal (Unregistered)', other:'Other' },
+  legal_status: { sole_proprietorship:'Sole Proprietorship', partnership:'Partnership', limited_private:'Limited Company (Private)', limited_public:'Limited Company (Public)', cooperative:'Cooperative', cbo:'CBO', informal:'Informal (Unregistered)', market_vendor:'Market Vendor' },
   owner_role: { owner:'Owner', manager:'Manager', owner_manager:'Owner-Manager', other:'Other' },
   gender: { male:'Male', female:'Female' },
   nationality: { ugandan:'Ugandan', other:'Other' },
@@ -24,10 +24,10 @@ const L: Record<string, Record<string, string>> = {
   ownership: { single_owner:'Single Owner', multiple_owners:'Multiple Owners', family_owned:'Family Owned', community_owned:'Community Owned', other:'Other' },
   family_gen: { first:'1st Generation', second:'2nd Generation', third_plus:'3rd+ Generation' },
   sector: { wholesale:'Wholesale', retail:'Retail', import_export:'Import/Export', accommodation_food:'Accommodation & Food', manufacturing:'Manufacturing', agribusiness:'Agribusiness', financial:'Financial Services', health:'Health & Social', education:'Education', mechanical:'Mechanical & Repair', construction:'Construction & Real Estate', ict:'ICT & Telecom', transport:'Transport & Storage', recreation:'Recreation & Personal', professional:'Professional Services', other:'Other' },
-  registration: { mmc_only:'MMC Only', ursb_only:'URSB Only', both:'Both URSB & MMC', informal:'Informal', other:'Other' },
+  registration: { mmc_only:'MMC Only', ursb_only:'URSB Only', both:'Both URSB & MMC', informal:'Informal', other:'Other', drug_authority:'Drug Authority' },
   biz_size: { micro:'Micro (1-4)', small:'Small (5-19)', medium:'Medium (20-99)', large:'Large (100+)' },
   emp_growth: { sig_increased:'Significantly Increased (>20%)', mod_increased:'Moderately Increased (10-20%)', slight_increased:'Slightly Increased (1-9%)', same:'Same', decreased:'Decreased', not_applicable:'N/A (New Business)' },
-  premises: { own:'Own Premises', rented:'Rented/Leased', home:'Home-based', mobile:'Mobile/No Fixed', other:'Other' },
+  premises: { own:'Own Premises', rented:'Rented/Leased', mobile:'Mobile/No Fixed', other:'Other' },
   branch_loc: { within_mmc:'Within MMC', mukono_district:'Mukono District', another_district:'Another District', other:'Other' },
   target_market: { local_consumers:'Local Consumers', b2b:'B2B', government:'Government', ngos:'NGOs', export:'Export', other:'Other' },
   market_reach: { mmc_only:'MMC Only', mukono_district:'Mukono District', gkma:'Greater Kampala', national:'National', regional:'East Africa', international:'International' },
@@ -129,14 +129,14 @@ function getEmployeeStats(records:any[]) {
 function getSizeCategories(records:any[]) {
   const c:Record<string,number>={'Micro (1-4)':0,'Small (5-19)':0,'Medium (20-99)':0,'Large (100+)':0}
   for (const r of records) {
-    const t=parseInt(g(r,'section_b/total_employees'))||0
+    const t=parseInt(g(r,'section_b/categorized_employees_total'))||parseInt(g(r,'section_b/number_of_employees'))||0
     if(t<=4)c['Micro (1-4)']++;else if(t<=19)c['Small (5-19)']++;else if(t<=99)c['Medium (20-99)']++;else c['Large (100+)']++
   }
   return c
 }
 
 function getInfraScores(records:any[]) {
-  const fields=['road_access','electricity','water_supply','waste_management','drainage','security','internet','public_transport','parking']
+  const fields=['road_access','electricity','waste_management','drainage','security','internet','public_transport','parking']
   const sm:Record<string,number>={very_poor:1,poor:2,fair:3,good:4,very_good:5}
   const result:Record<string,number>={}
   for(const f of fields){
@@ -152,14 +152,27 @@ function getGPSPoints(records:any[]) {
   for(const r of records){
     const gps=g(r,'section_l/gps_location')
     if(gps?.coordinates){
+      const startTime = r.start_time ? new Date(r.start_time).getTime() : 0
+      const endTime = r.end_time ? new Date(r.end_time).getTime() : 0
+      const subTime = r.__system?.submissionDate ? new Date(r.__system.submissionDate).getTime() : 0
       pts.push({
         lat:gps.coordinates[1],lon:gps.coordinates[0],
         accuracy:gps.properties?.accuracy||0,
-        business:g(r,'section_a/business_legal_name')||'Unknown',
+        altitude:gps.coordinates[2]||0,
+        business:g(r,'section_a/business_legal_name')||g(r,'section_a/business_trading_name')||'Unknown',
         sector:L.sector[g(r,'section_a/business_sector')]||g(r,'section_a/business_sector')||'N/A',
         ward:g(r,'section_a/ward')?.replace(/_/g,' ').replace(/\b\w/g,(c:string)=>c.toUpperCase())||'',
+        division:g(r,'section_a/division')?.replace(/_/g,' ').replace(/\b\w/g,(c:string)=>c.toUpperCase())||'',
         owner:g(r,'section_a3/owner_name')||'',
-        division:g(r,'section_a/division')?.replace(/_/g,' ').replace(/\b\w/g,(c:string)=>c.toUpperCase())||''
+        enumerator:r.__system?.submitterName||'Unknown',
+        enumerator_id:g(r,'enumerator_id')||'',
+        submission_date:r.__system?.submissionDate||'',
+        start_time:r.start_time||'',
+        end_time:r.end_time||'',
+        start_ts:startTime,
+        end_ts:endTime,
+        sub_ts:subTime,
+        device_id:r.__system?.deviceId||''
       })
     }
   }
@@ -173,6 +186,15 @@ function getWardDistribution(records:any[]) {
     if(v){const label=v.replace(/_/g,' ').replace(/\b\w/g,(c:string)=>c.toUpperCase());w[label]=(w[label]||0)+1}
   }
   return w
+}
+
+function getDivisionDistribution(records:any[]) {
+  const d:Record<string,number>={}
+  for(const r of records){
+    const v=g(r,'section_a/division')
+    if(v){const label=v.replace(/_/g,' ').replace(/\b\w/g,(c:string)=>c.toUpperCase());d[label]=(d[label]||0)+1}
+  }
+  return d
 }
 
 function getSectorByWard(records:any[]) {
@@ -197,7 +219,58 @@ function getGenderBySector(records:any[]) {
   return result
 }
 
-// ==================== DATA QUALITY ENGINE (14 checks) ====================
+// NEW v4: Production capacity stats
+function getProductionStats(records:any[]) {
+  let fullCap=0, notFullCap=0
+  for(const r of records){
+    const v = g(r,'section_b4_production/operating_full_capacity')
+    if(v==='yes') fullCap++
+    else if(v==='no') notFullCap++
+  }
+  return { 'At Full Capacity':fullCap, 'Below Capacity':notFullCap }
+}
+
+// NEW v4: Investment section stats
+function getInvestmentStats(records:any[]) {
+  let hasFeasibility=0, seekingInvestment=0, willingFeatured=0
+  for(const r of records){
+    if(g(r,'investment_section/has_feasibility_study')==='yes') hasFeasibility++
+    if(g(r,'investment_section/seeking_investment')==='yes') seekingInvestment++
+    if(g(r,'investment_section/willing_to_be_featured')==='yes') willingFeatured++
+  }
+  return {has_feasibility:hasFeasibility, seeking_investment:seekingInvestment, willing_featured:willingFeatured}
+}
+
+// NEW v4: Enumerator tracker with GPS trail data
+function getEnumeratorTrails(records:any[]) {
+  const trails:Record<string,any[]>={}
+  for(const r of records){
+    const enu = r.__system?.submitterName||'Unknown'
+    const gps = g(r,'section_l/gps_location')
+    const startTime = r.start_time
+    const endTime = r.end_time
+    const subDate = r.__system?.submissionDate
+    if(!trails[enu]) trails[enu]=[]
+    trails[enu].push({
+      business:g(r,'section_a/business_legal_name')||g(r,'section_a/business_trading_name')||'Unknown',
+      lat:gps?.coordinates?.[1]||null,
+      lon:gps?.coordinates?.[0]||null,
+      accuracy:gps?.properties?.accuracy||null,
+      start_time:startTime,
+      end_time:endTime,
+      submission_date:subDate,
+      start_ts:startTime?new Date(startTime).getTime():0,
+      end_ts:endTime?new Date(endTime).getTime():0,
+      sub_ts:subDate?new Date(subDate).getTime():0,
+      ward:g(r,'section_a/ward')?.replace(/_/g,' ').replace(/\b\w/g,(c:string)=>c.toUpperCase())||''
+    })
+    // sort by submission time
+    trails[enu].sort((a:any,b:any)=>a.sub_ts-b.sub_ts)
+  }
+  return trails
+}
+
+// ==================== DATA QUALITY ENGINE (16 checks - v4 updated) ====================
 interface Issue { id:string; business:string; severity:'high'|'medium'|'low'; type:string; description:string; field:string; submitted:string; enumerator:string }
 
 function detectIssues(records:any[]): {issues:Issue[], summary:Record<string,number>} {
@@ -208,12 +281,12 @@ function detectIssues(records:any[]): {issues:Issue[], summary:Record<string,num
     'Revenue Inconsistency':0,'Employee Data Error':0,
     'Missing GPS':0,'Year Outlier':0,'No Response/Empty Section':0,
     'Phone Format':0,'Operating Hours Outlier':0,'Logical Inconsistency':0,
-    'Suspicious Pattern':0,'National ID Format':0
+    'Suspicious Pattern':0,'National ID Format':0,'GPS Accuracy Poor':0,'Production Inconsistency':0
   }
 
   const nameMap:Record<string,string[]>={}
   for(const r of records){
-    const n=(g(r,'section_a/business_legal_name')||'').trim().toLowerCase()
+    const n=(g(r,'section_a/business_legal_name')||g(r,'section_a/business_trading_name')||'').trim().toLowerCase()
     const w=(g(r,'section_a/ward')||'').trim().toLowerCase()
     const key=n+'|'+w
     if(n){if(!nameMap[key])nameMap[key]=[];nameMap[key].push(r.__id)}
@@ -221,12 +294,12 @@ function detectIssues(records:any[]): {issues:Issue[], summary:Record<string,num
 
   for(const r of records){
     const id=r.__id||''
-    const biz=g(r,'section_a/business_legal_name')||'Unknown'
+    const biz=g(r,'section_a/business_legal_name')||g(r,'section_a/business_trading_name')||'Unknown'
     const sub=r.__system?.submissionDate?.split('T')[0]||''
     const enu=r.__system?.submitterName||'Unknown'
 
     // 1. DUPLICATE
-    const n=(g(r,'section_a/business_legal_name')||'').trim().toLowerCase()
+    const n=(g(r,'section_a/business_legal_name')||g(r,'section_a/business_trading_name')||'').trim().toLowerCase()
     const w=(g(r,'section_a/ward')||'').trim().toLowerCase()
     const key=n+'|'+w
     if(n && nameMap[key]?.length>1){
@@ -234,27 +307,31 @@ function detectIssues(records:any[]): {issues:Issue[], summary:Record<string,num
       summary['Duplicate Business']++
     }
 
-    // 2. RUSHED (<3 min for 80+ field form)
+    // 2. RUSHED (<3 min) or LONG (>3 hr)
     if(r.start_time && r.end_time){
       const dur=(new Date(r.end_time).getTime()-new Date(r.start_time).getTime())/60000
       if(dur<3){
-        issues.push({id,business:biz,severity:'high',type:'Rushed Submission',description:`Completed in ${dur.toFixed(1)} min. Form has 80+ fields — impossible to fill properly.`,field:'Duration',submitted:sub,enumerator:enu})
+        issues.push({id,business:biz,severity:'high',type:'Rushed Submission',description:`Completed in ${dur.toFixed(1)} min. Form has 80+ fields.`,field:'Duration',submitted:sub,enumerator:enu})
         summary['Rushed Submission']++
       } else if(dur>180){
-        issues.push({id,business:biz,severity:'low',type:'Extremely Long Duration',description:`Took ${Math.round(dur)} min. Enumerator may have left form open.`,field:'Duration',submitted:sub,enumerator:enu})
+        issues.push({id,business:biz,severity:'low',type:'Extremely Long Duration',description:`Took ${Math.round(dur)} min. Form may have been left open.`,field:'Duration',submitted:sub,enumerator:enu})
         summary['Extremely Long Duration']++
       }
     }
 
-    // 3. MISSING CRITICAL FIELDS (16 fields)
+    // 3. MISSING CRITICAL FIELDS (18 fields for v4)
     const critical=[
-      {p:'section_a/business_legal_name',l:'Business Name'},{p:'section_a/division',l:'Division'},{p:'section_a/ward',l:'Ward'},
-      {p:'section_a/business_sector',l:'Sector'},{p:'section_a/business_phone1',l:'Phone'},{p:'section_a/year_established',l:'Year Established'},
-      {p:'section_a3/owner_name',l:'Owner Name'},{p:'section_a3/owner_gender',l:'Gender'},{p:'section_a3/owner_age',l:'Owner Age'},
-      {p:'section_b/male_fulltime',l:'Male Full-time'},{p:'section_b/female_fulltime',l:'Female Full-time'},
-      {p:'section_c/current_monthly_revenue',l:'Monthly Revenue'},{p:'section_e/capital_sources',l:'Capital Source'},
-      {p:'section_l/gps_location',l:'GPS Location'},
-      {p:'section_a/registration_status',l:'Registration Status'},{p:'section_a/legal_status',l:'Legal Status'}
+      {p:'section_a/business_trading_name',l:'Trading Name'},{p:'section_a/legal_status',l:'Legal Status'},
+      {p:'section_a/division',l:'Division'},{p:'section_a/ward',l:'Ward'},{p:'section_a/village',l:'Village'},
+      {p:'section_a/business_sector',l:'Sector'},{p:'section_a/business_phone1',l:'Phone'},
+      {p:'section_a/year_established',l:'Year Established'},{p:'section_a/registration_status',l:'Registration'},
+      {p:'section_a3/owner_name',l:'Owner Name'},{p:'section_a3/owner_gender',l:'Gender'},
+      {p:'section_a3/owner_age',l:'Owner Age'},{p:'section_a3/owner_education',l:'Education'},
+      {p:'section_b/number_of_employees',l:'Number of Employees'},
+      {p:'section_c/current_monthly_revenue',l:'Monthly Revenue'},
+      {p:'section_e/capital_sources',l:'Capital Source'},
+      {p:'section_f/digital_literacy',l:'Digital Literacy'},
+      {p:'section_l/gps_location',l:'GPS Location'}
     ]
     for(const c of critical){
       const v=g(r,c.p)
@@ -273,9 +350,11 @@ function detectIssues(records:any[]): {issues:Issue[], summary:Record<string,num
     const secChecks=[
       {section:'section_c',label:'Finance (Section C)',fields:['current_monthly_revenue','financial_records']},
       {section:'section_f',label:'Technology (Section F)',fields:['tech_used','digital_literacy']},
-      {section:'section_g',label:'Infrastructure (Section G)',fields:['road_access','electricity','water_supply']},
+      {section:'section_g',label:'Infrastructure (Section G)',fields:['road_access','electricity']},
       {section:'section_h',label:'Skills (Section H)',fields:['lacks_skills','received_training']},
       {section:'section_i',label:'Challenges (Section I)',fields:['business_challenges','support_needed']},
+      {section:'section_b4_production',label:'Production (Section B4)',fields:['current_production_capacity','operating_full_capacity']},
+      {section:'investment_section',label:'Investment Section',fields:['has_feasibility_study','seeking_investment']},
     ]
     for(const sc of secChecks){
       let allEmpty=true
@@ -307,7 +386,7 @@ function detectIssues(records:any[]): {issues:Issue[], summary:Record<string,num
       summary['No Consent']++
     }
 
-    // 8. EMPLOYEE DATA ERROR
+    // 8. EMPLOYEE DATA ERROR (v4: uses number_of_employees + categorized_employees_total)
     const empF=['male_fulltime','male_parttime','female_fulltime','female_parttime','pwd_fulltime','pwd_parttime']
     for(const ef of empF){
       const ev=g(r,'section_b/'+ef)
@@ -316,11 +395,16 @@ function detectIssues(records:any[]): {issues:Issue[], summary:Record<string,num
         summary['Employee Data Error']++
       }
     }
-    // Check total vs sum
-    const totalEmp=parseInt(g(r,'section_b/total_employees'))||0
-    const sumEmp=(g(r,'section_b/male_fulltime')||0)+(g(r,'section_b/male_parttime')||0)+(g(r,'section_b/female_fulltime')||0)+(g(r,'section_b/female_parttime')||0)
-    if(totalEmp>0 && sumEmp>0 && Math.abs(totalEmp-sumEmp)>totalEmp*0.5){
-      issues.push({id,business:biz,severity:'medium',type:'Employee Data Error',description:`Total employees (${totalEmp}) differs significantly from sum of male+female (${sumEmp}).`,field:'Total Employees',submitted:sub,enumerator:enu})
+    const totalEmp=parseInt(g(r,'section_b/number_of_employees'))||0
+    const catTotal=parseInt(g(r,'section_b/categorized_employees_total'))||0
+    if(totalEmp>0 && catTotal>0 && Math.abs(totalEmp-catTotal)>Math.max(totalEmp,catTotal)*0.5){
+      issues.push({id,business:biz,severity:'medium',type:'Employee Data Error',description:`Total employees (${totalEmp}) differs from categorized sum (${catTotal}).`,field:'Total vs Categorized Employees',submitted:sub,enumerator:enu})
+      summary['Employee Data Error']++
+    }
+    // v4: past year employees comparison
+    const pastEmp=parseInt(g(r,'section_b/employees_past_year'))||0
+    if(totalEmp>0 && pastEmp>0 && pastEmp>totalEmp*5){
+      issues.push({id,business:biz,severity:'low',type:'Employee Data Error',description:`Past year employees (${pastEmp}) is 5x+ current (${totalEmp}). Check data.`,field:'Employees Past Year',submitted:sub,enumerator:enu})
       summary['Employee Data Error']++
     }
 
@@ -347,15 +431,15 @@ function detectIssues(records:any[]): {issues:Issue[], summary:Record<string,num
     const opDays=g(r,'section_b/operating_days_week')
     const opHrs=g(r,'section_b/operating_hours_day')
     if(opDays!=null&&(opDays<1||opDays>7)){
-      issues.push({id,business:biz,severity:'low',type:'Operating Hours Outlier',description:`${opDays} days/week — outside 1-7.`,field:'Operating Days',submitted:sub,enumerator:enu})
+      issues.push({id,business:biz,severity:'low',type:'Operating Hours Outlier',description:`${opDays} days/week outside 1-7.`,field:'Operating Days',submitted:sub,enumerator:enu})
       summary['Operating Hours Outlier']++
     }
     if(opHrs!=null&&(opHrs<1||opHrs>24)){
-      issues.push({id,business:biz,severity:'low',type:'Operating Hours Outlier',description:`${opHrs} hours/day — outside 1-24.`,field:'Operating Hours',submitted:sub,enumerator:enu})
+      issues.push({id,business:biz,severity:'low',type:'Operating Hours Outlier',description:`${opHrs} hours/day outside 1-24.`,field:'Operating Hours',submitted:sub,enumerator:enu})
       summary['Operating Hours Outlier']++
     }
 
-    // 12. LOGICAL INCONSISTENCIES
+    // 12. LOGICAL INCONSISTENCIES (expanded for v4)
     if(g(r,'section_e/applied_for_loan')==='no'&&g(r,'section_e/loan_status')){
       issues.push({id,business:biz,severity:'high',type:'Logical Inconsistency',description:`Said "No" to loan application but has loan status.`,field:'Loan Applied vs Status',submitted:sub,enumerator:enu})
       summary['Logical Inconsistency']++
@@ -380,21 +464,39 @@ function detectIssues(records:any[]): {issues:Issue[], summary:Record<string,num
       issues.push({id,business:biz,severity:'medium',type:'Logical Inconsistency',description:`No multiple branches but branch count > 0.`,field:'Branches',submitted:sub,enumerator:enu})
       summary['Logical Inconsistency']++
     }
+    // v4: new logical checks
+    if(g(r,'section_c/made_investments')==='no'&&g(r,'section_c/investment_areas')){
+      issues.push({id,business:biz,severity:'medium',type:'Logical Inconsistency',description:`Said "No" to investments but specified investment areas.`,field:'Investments',submitted:sub,enumerator:enu})
+      summary['Logical Inconsistency']++
+    }
+    if(g(r,'section_f/adopted_digital_tools')==='no'&&g(r,'section_f/digital_tools_adopted')){
+      issues.push({id,business:biz,severity:'medium',type:'Logical Inconsistency',description:`Said "No" to digital tools adoption but specified tools.`,field:'Digital Tools',submitted:sub,enumerator:enu})
+      summary['Logical Inconsistency']++
+    }
+    if(g(r,'section_k/aware_of_support')==='no'&&g(r,'section_k/support_programs')){
+      issues.push({id,business:biz,severity:'medium',type:'Logical Inconsistency',description:`Not aware of support but specified support programs.`,field:'Support Programs',submitted:sub,enumerator:enu})
+      summary['Logical Inconsistency']++
+    }
+    if(g(r,'section_k/plans_to_invest')==='no'&&g(r,'section_k/investment_amount')){
+      issues.push({id,business:biz,severity:'medium',type:'Logical Inconsistency',description:`No investment plans but specified investment amount.`,field:'Investment Plans',submitted:sub,enumerator:enu})
+      summary['Logical Inconsistency']++
+    }
 
-    // 13. SUSPICIOUS PATTERN (all multi-select = only 1 option selected across multiple questions)
+    // 13. SUSPICIOUS PATTERN
     const multiSelects=[
       g(r,'section_b/sourcing_challenges'),g(r,'section_i/business_challenges'),
-      g(r,'section_i/support_needed'),g(r,'section_h/training_needs'),g(r,'section_h/missing_skills')
+      g(r,'section_i/support_needed'),g(r,'section_h/training_needs'),g(r,'section_h/missing_skills'),
+      g(r,'section_g/infra_challenges')
     ].filter(v=>v)
     if(multiSelects.length>=3){
       const allSingle=multiSelects.every(v=>!String(v).includes(' '))
       if(allSingle){
-        issues.push({id,business:biz,severity:'low',type:'Suspicious Pattern',description:`All multi-select questions have exactly 1 option. May indicate rushed entry.`,field:'Multiple fields',submitted:sub,enumerator:enu})
+        issues.push({id,business:biz,severity:'low',type:'Suspicious Pattern',description:`All multi-select/rank questions have exactly 1 option. May indicate rushed entry.`,field:'Multiple fields',submitted:sub,enumerator:enu})
         summary['Suspicious Pattern']++
       }
     }
 
-    // 14. NATIONAL ID FORMAT
+    // 14. TIN FORMAT
     const nid=g(r,'section_a/tin_number')
     if(nid){
       const cleaned=String(nid).replace(/\s/g,'')
@@ -403,12 +505,25 @@ function detectIssues(records:any[]): {issues:Issue[], summary:Record<string,num
         summary['National ID Format']++
       }
     }
+
+    // 15. GPS ACCURACY POOR (>100m)
+    const gps=g(r,'section_l/gps_location')
+    if(gps?.properties?.accuracy && gps.properties.accuracy > 100){
+      issues.push({id,business:biz,severity:'low',type:'GPS Accuracy Poor',description:`GPS accuracy is ${Math.round(gps.properties.accuracy)}m (>100m threshold). Location unreliable.`,field:'GPS Accuracy',submitted:sub,enumerator:enu})
+      summary['GPS Accuracy Poor']++
+    }
+
+    // 16. PRODUCTION INCONSISTENCY
+    if(g(r,'section_b4_production/operating_full_capacity')==='yes'&&g(r,'section_b4_production/reasons_not_full_capacity')){
+      issues.push({id,business:biz,severity:'medium',type:'Production Inconsistency',description:`Claims full capacity but provided reasons for not being at full capacity.`,field:'Production Capacity',submitted:sub,enumerator:enu})
+      summary['Production Inconsistency']++
+    }
   }
 
   return {issues,summary}
 }
 
-// ==================== EXPORT ====================
+// ==================== EXPORT (v4 - 65+ columns) ====================
 function buildExport(records:any[]) {
   return records.map((r:any,i:number)=>{
     const dur=(r.start_time&&r.end_time)?((new Date(r.end_time).getTime()-new Date(r.start_time).getTime())/60000).toFixed(1):''
@@ -419,6 +534,7 @@ function buildExport(records:any[]) {
       'Submission Date':r.__system?.submissionDate||'',
       'Duration (min)':dur,
       'Enumerator':r.__system?.submitterName||'',
+      'Enumerator ID':g(r,'enumerator_id')||'',
       'Business Name':g(r,'section_a/business_legal_name')||'',
       'Trading Name':g(r,'section_a/business_trading_name')||'',
       'Legal Status':L.legal_status[g(r,'section_a/legal_status')]||g(r,'section_a/legal_status')||'',
@@ -432,45 +548,62 @@ function buildExport(records:any[]) {
       'Reg Number':g(r,'section_a/business_reg_number')||'',
       'TIN':g(r,'section_a/tin_number')||'',
       'Phone':g(r,'section_a/business_phone1')||'',
+      'Phone 2':g(r,'section_a/business_phone2')||'',
       'Email':g(r,'section_a/business_email')||'',
+      'Website':g(r,'section_a/business_website')||'',
+      'Contact Person':g(r,'section_a/contact_person_name')||'',
+      'Contact Title':g(r,'section_a/contact_person_title')||'',
       'Owner Name':g(r,'section_a3/owner_name')||'',
       'Owner Role':L.owner_role[g(r,'section_a3/owner_role')]||'',
       'Owner Gender':L.gender[g(r,'section_a3/owner_gender')]||'',
       'Owner Age':g(r,'section_a3/owner_age')||'',
+      'Nationality':L.nationality[g(r,'section_a3/owner_nationality')]||'',
       'Education':L.education[g(r,'section_a3/owner_education')]||'',
       'Disability':L.disability[g(r,'section_a3/owner_disability')]||'',
       'Ownership Structure':L.ownership[g(r,'section_a3/ownership_structure')]||'',
-      'Total Employees':g(r,'section_b/total_employees')||'',
+      'Family Generation':L.family_gen[g(r,'section_a3/family_generation')]||'',
+      'Number of Employees':g(r,'section_b/number_of_employees')||'',
       'Male FT':g(r,'section_b/male_fulltime')||'',
       'Male PT':g(r,'section_b/male_parttime')||'',
       'Female FT':g(r,'section_b/female_fulltime')||'',
       'Female PT':g(r,'section_b/female_parttime')||'',
       'PWD FT':g(r,'section_b/pwd_fulltime')||'',
       'PWD PT':g(r,'section_b/pwd_parttime')||'',
+      'Categorized Total':g(r,'section_b/categorized_employees_total')||'',
       'Size Category':g(r,'section_b/business_size_category')||'',
-      'Employment Growth':L.emp_growth[g(r,'section_b/employment_growth')]||'',
+      'Employees Past Year':g(r,'section_b/employees_past_year')||'',
+      'Growth Status':g(r,'section_b/employment_growth_status')||'',
       'Premises':L.premises[g(r,'section_b/business_premises')]||'',
       'Op Days/Week':g(r,'section_b/operating_days_week')||'',
       'Op Hours/Day':g(r,'section_b/operating_hours_day')||'',
-      'Target Market':L.target_market[g(r,'section_b/target_market')]||'',
+      'Branches':g(r,'section_b/number_of_branches')||'',
+      'Target Market':g(r,'section_b/target_market')||'',
       'Market Reach':L.market_reach[g(r,'section_b/market_reach')]||'',
       'Sells Online':g(r,'section_b/sell_online')||'',
+      'Production Capacity':g(r,'section_b4_production/current_production_capacity')||'',
+      'At Full Capacity':g(r,'section_b4_production/operating_full_capacity')||'',
       'Monthly Revenue':L.revenue[g(r,'section_c/current_monthly_revenue')]||'',
       'Revenue Trend':L.revenue_trend[g(r,'section_c/revenue_3years_ago')]||'',
       'Monthly Cost':L.revenue[g(r,'section_c/monthly_production_cost')]||'',
       'Financial Records':L.fin_records[g(r,'section_c/financial_records')]||'',
       'Trading Licence':g(r,'section_d/has_trading_licence')||'',
       'Pays Taxes':g(r,'section_d/pays_taxes')||'',
-      'Capital Source':L.capital_sources[g(r,'section_e/capital_sources')]||'',
-      'Applied Loan':g(r,'section_e/applied_for_loan')||'',
-      'Loan Status':L.loan_status[g(r,'section_e/loan_status')]||'',
+      'Tax Incentives':g(r,'section_d/receives_tax_incentives')||'',
       'Digital Literacy':L.digital_literacy[g(r,'section_f/digital_literacy')]||'',
+      'Interested in Tech':g(r,'section_f/interested_in_tech')||'',
+      'Has Business Plan':g(r,'section_k/has_business_plan')||'',
+      'Has Feasibility Study':g(r,'investment_section/has_feasibility_study')||'',
+      'Seeking Investment':g(r,'investment_section/seeking_investment')||'',
       'Regulatory Rating':L.regulatory[g(r,'regulatory_section/regulatory_environment')]||'',
       'Export Plans':L.export_plans[g(r,'section_j/export_plans')]||'',
       'Business Appearance':L.appearance[g(r,'section_l/business_appearance')]||'',
       'Activity Level':L.activity[g(r,'section_l/activity_level')]||'',
+      'Customers Observed':g(r,'section_l/customers_observed')||'',
       'GPS':gpsStr,
+      'GPS Accuracy':gps?.properties?.accuracy?Math.round(gps.properties.accuracy)+'m':'',
       'Consent':g(r,'consent')||'',
+      'Followup Contact':g(r,'followup_contact')||'',
+      'Willing FGD':g(r,'willing_fgd')||'',
       'Submitted By':r.__system?.submitterName||''
     }
   })
@@ -533,7 +666,7 @@ app.get('/api/stats',async(c)=>{
 
     const ages=recs.map(r=>g(r,'section_a3/owner_age')).filter(a=>a!=null) as number[]
     const avgAge=ages.length>0?Math.round(ages.reduce((s,a)=>s+a,0)/ages.length):0
-    const totalEmp=recs.reduce((s,r)=>s+(parseInt(g(r,'section_b/total_employees'))||0),0)
+    const totalEmp=recs.reduce((s,r)=>s+(parseInt(g(r,'section_b/number_of_employees'))||parseInt(g(r,'section_b/categorized_employees_total'))||0),0)
     const consentY=recs.filter(r=>r.consent==='yes').length
     const femaleOwners=recs.filter(r=>g(r,'section_a3/owner_gender')==='female').length
 
@@ -541,6 +674,7 @@ app.get('/api/stats',async(c)=>{
       total:d['@odata.count'],
       timeline:getTimeline(recs),
       ward_distribution:getWardDistribution(recs),
+      division_distribution:getDivisionDistribution(recs),
       sector:countSingle(recs,'section_a/business_sector',L.sector),
       sector_by_ward:getSectorByWard(recs),
       gender_by_sector:getGenderBySector(recs),
@@ -550,13 +684,15 @@ app.get('/api/stats',async(c)=>{
       education:countSingle(recs,'section_a3/owner_education',L.education),
       disability:countSingle(recs,'section_a3/owner_disability',L.disability),
       ownership:countSingle(recs,'section_a3/ownership_structure',L.ownership),
+      family_gen:countSingle(recs,'section_a3/family_generation',L.family_gen),
+      nationality:countSingle(recs,'section_a3/owner_nationality',L.nationality),
       age_groups:getAgeGroups(recs),
       avg_age:avgAge,
       female_pct:recs.length>0?Math.round(femaleOwners/recs.length*100):0,
       total_employees:totalEmp,
       employee_breakdown:getEmployeeStats(recs),
       size_categories:getSizeCategories(recs),
-      emp_growth:countSingle(recs,'section_b/employment_growth',L.emp_growth),
+      emp_growth:countSingle(recs,'section_b/employment_growth_status',L.emp_growth),
       premises:countSingle(recs,'section_b/business_premises',L.premises),
       target_market:countSingle(recs,'section_b/target_market',L.target_market),
       market_reach:countSingle(recs,'section_b/market_reach',L.market_reach),
@@ -565,6 +701,7 @@ app.get('/api/stats',async(c)=>{
       online_platforms:countMulti(recs,'section_b/online_platforms',L.online_platforms),
       input_sources:countSingle(recs,'section_b/input_sources',L.input_sources),
       sourcing_challenges:countMulti(recs,'section_b/sourcing_challenges',L.sourcing_challenges),
+      production:getProductionStats(recs),
       revenue:countSingle(recs,'section_c/current_monthly_revenue',L.revenue),
       revenue_trend:countSingle(recs,'section_c/revenue_3years_ago',L.revenue_trend),
       production_cost:countSingle(recs,'section_c/monthly_production_cost',L.revenue),
@@ -573,37 +710,51 @@ app.get('/api/stats',async(c)=>{
       trading_licence:countSingle(recs,'section_d/has_trading_licence',L.yes_no),
       pays_taxes:countSingle(recs,'section_d/pays_taxes',L.yes_no),
       tax_types:countMulti(recs,'section_d/tax_types',L.tax_types),
-      capital_sources:countSingle(recs,'section_e/capital_sources',L.capital_sources),
+      no_tax_reasons:countMulti(recs,'section_d/no_tax_reasons',L.no_tax_reasons),
+      receives_tax_incentives:countSingle(recs,'section_d/receives_tax_incentives',L.yes_no),
+      capital_sources:countMulti(recs,'section_e/capital_sources',L.capital_sources),
       loan_applied:countSingle(recs,'section_e/applied_for_loan',L.yes_no),
       loan_status:countSingle(recs,'section_e/loan_status',L.loan_status),
       loan_barriers:countMulti(recs,'section_e/loan_barriers',L.loan_barriers),
-      fin_support:countSingle(recs,'section_e/financial_support_needed',L.fin_support),
+      fin_support:countMulti(recs,'section_e/financial_support_needed',L.fin_support),
+      interested_tech:countSingle(recs,'section_f/interested_in_tech',L.yes_no),
       tech_used:countMulti(recs,'section_f/tech_used',L.tech_used),
       payment_methods:countMulti(recs,'section_f/payment_methods',L.payment_methods),
       digital_literacy:countSingle(recs,'section_f/digital_literacy',L.digital_literacy),
+      adopted_digital:countSingle(recs,'section_f/adopted_digital_tools',L.yes_no),
       digital_barriers:countMulti(recs,'section_f/digital_barriers',L.digital_barriers),
       infra_scores:getInfraScores(recs),
       infra_challenges:countMulti(recs,'section_g/infra_challenges',L.infra_challenges),
       location_importance:countSingle(recs,'section_g/location_importance',L.location_importance),
+      lacks_skills:countSingle(recs,'section_h/lacks_skills',L.yes_no),
       missing_skills:countMulti(recs,'section_h/missing_skills',L.missing_skills),
       received_training:countSingle(recs,'section_h/received_training',L.yes_no),
       training_sources:countMulti(recs,'section_h/training_sources',L.training_sources),
       training_needs:countMulti(recs,'section_h/training_needs',L.training_needs),
       challenges:countMulti(recs,'section_i/business_challenges',L.challenges),
       support_needed:countMulti(recs,'section_i/support_needed',L.support_needed),
+      interested_collaboration:countSingle(recs,'section_i/interested_in_collaboration',L.yes_no),
       growth_opp:countMulti(recs,'section_j/growth_opportunities',L.growth_opp),
+      participated_fairs:countSingle(recs,'section_j/participated_in_fairs',L.yes_no),
+      association_member:countSingle(recs,'section_j/business_association_member',L.yes_no),
       export_plans:countSingle(recs,'section_j/export_plans',L.export_plans),
+      aware_support:countSingle(recs,'section_k/aware_of_support',L.yes_no),
       support_programs:countMulti(recs,'section_k/support_programs',L.support_programs),
       mmc_support:countMulti(recs,'section_k/mmc_support',L.mmc_support),
+      plans_invest:countSingle(recs,'section_k/plans_to_invest',L.yes_no),
+      investment_amount:countSingle(recs,'section_k/investment_amount',L.invest_amount),
+      has_business_plan:countSingle(recs,'section_k/has_business_plan',L.yes_no),
+      investment_stats:getInvestmentStats(recs),
       regulatory:countSingle(recs,'regulatory_section/regulatory_environment',L.regulatory),
       appearance:countSingle(recs,'section_l/business_appearance',L.appearance),
       activity_level:countSingle(recs,'section_l/activity_level',L.activity),
       consent_rate:recs.length>0?Math.round(consentY/recs.length*100):0,
       gps_points:getGPSPoints(recs),
+      enumerator_trails:getEnumeratorTrails(recs),
       enumerators:(()=>{const m:Record<string,number>={};for(const r of recs){const n=r.__system?.submitterName||'Unknown';m[n]=(m[n]||0)+1};return m})(),
       businesses:recs.map((r:any)=>({
         id:r.__id,
-        name:g(r,'section_a/business_legal_name')||'Unknown',
+        name:g(r,'section_a/business_legal_name')||g(r,'section_a/business_trading_name')||'Unknown',
         trading_name:g(r,'section_a/business_trading_name')||'',
         sector:L.sector[g(r,'section_a/business_sector')]||g(r,'section_a/business_sector')||'N/A',
         ward:(g(r,'section_a/ward')||'').replace(/_/g,' ').replace(/\b\w/g,(c:string)=>c.toUpperCase()),
@@ -611,11 +762,12 @@ app.get('/api/stats',async(c)=>{
         owner:g(r,'section_a3/owner_name')||'N/A',
         gender:L.gender[g(r,'section_a3/owner_gender')]||'N/A',
         age:g(r,'section_a3/owner_age'),
-        employees:g(r,'section_b/total_employees')||'0',
+        employees:g(r,'section_b/number_of_employees')||g(r,'section_b/categorized_employees_total')||'0',
         revenue:L.revenue[g(r,'section_c/current_monthly_revenue')]||'N/A',
         registration:L.registration[g(r,'section_a/registration_status')]||'N/A',
         submitted:r.__system?.submissionDate||'',
-        submitted_by:r.__system?.submitterName||'N/A'
+        submitted_by:r.__system?.submitterName||'N/A',
+        has_gps:!!(g(r,'section_l/gps_location')?.coordinates)
       })),
       data_quality:{
         total_issues:q.issues.length,
@@ -663,7 +815,13 @@ body{font-family:'Inter',sans-serif}
 ::-webkit-scrollbar{width:6px}::-webkit-scrollbar-track{background:#f1f5f9}::-webkit-scrollbar-thumb{background:#94a3b8;border-radius:3px}
 .severity-high{background:#fef2f2;border-color:#fecaca}.severity-medium{background:#fffbeb;border-color:#fed7aa}.severity-low{background:#f0fdf4;border-color:#bbf7d0}
 .badge-high{background:#dc2626;color:#fff}.badge-medium{background:#d97706;color:#fff}.badge-low{background:#16a34a;color:#fff}
-#map{height:500px;border-radius:12px;z-index:1}
+#map{height:600px;border-radius:12px;z-index:1}
+.transit-line{stroke-dasharray:8 4;animation:dash 1s linear infinite}
+@keyframes dash{to{stroke-dashoffset:-12}}
+.map-panel{background:rgba(255,255,255,.96);border-radius:10px;padding:12px;box-shadow:0 4px 12px rgba(0,0,0,.15);font-size:12px;max-height:300px;overflow-y:auto}
+.enu-badge{display:inline-flex;align-items:center;gap:4px;padding:3px 8px;border-radius:12px;font-size:11px;font-weight:600;cursor:pointer;border:2px solid transparent;transition:all .2s}
+.enu-badge.active{border-color:#0369a1;box-shadow:0 0 0 2px rgba(3,105,161,.3)}
+.enu-badge:hover{transform:scale(1.05)}
 </style></head>
 <body class="bg-gray-50 min-h-screen">
 <header class="gradient-bg text-white shadow-lg">
@@ -672,7 +830,7 @@ body{font-family:'Inter',sans-serif}
 <div class="flex items-center gap-3">
 <div class="bg-white/20 p-2.5 rounded-lg"><i class="fas fa-city text-2xl text-yellow-300"></i></div>
 <div><h1 class="text-xl sm:text-2xl font-bold tracking-tight">Mukono Business Profiling Survey</h1>
-<p class="text-sm text-sky-200 mt-0.5">GKMA-UDP &mdash; World Bank &bull; Mukono Municipal Council &bull; Canva Consult</p></div></div>
+<p class="text-sm text-sky-200 mt-0.5">GKMA-UDP &mdash; World Bank &bull; Mukono Municipal Council &bull; Canva Consult &bull; <span class="text-yellow-200 font-semibold">Form v4</span></p></div></div>
 <div class="flex items-center gap-3 flex-wrap">
 <div class="flex items-center gap-2 bg-white/10 rounded-full px-4 py-2"><div class="pulse-dot"></div><span class="text-sm font-medium">Live Data</span></div>
 <button onclick="downloadExcel()" id="dlBtn" class="bg-emerald-500 hover:bg-emerald-400 text-white px-4 py-2 rounded-lg font-semibold text-sm transition flex items-center gap-2"><i class="fas fa-file-excel"></i> Excel</button>
@@ -686,13 +844,14 @@ body{font-family:'Inter',sans-serif}
 <button onclick="sw('finance')" class="nt px-3 py-2.5 text-sm font-medium rounded-t-lg whitespace-nowrap transition hover:bg-white/10" data-tab="finance"><i class="fas fa-coins mr-1"></i>Finance</button>
 <button onclick="sw('digital')" class="nt px-3 py-2.5 text-sm font-medium rounded-t-lg whitespace-nowrap transition hover:bg-white/10" data-tab="digital"><i class="fas fa-laptop mr-1"></i>Digital &amp; Infra</button>
 <button onclick="sw('challenges')" class="nt px-3 py-2.5 text-sm font-medium rounded-t-lg whitespace-nowrap transition hover:bg-white/10" data-tab="challenges"><i class="fas fa-exclamation-circle mr-1"></i>Challenges</button>
-<button onclick="sw('map')" class="nt px-3 py-2.5 text-sm font-medium rounded-t-lg whitespace-nowrap transition hover:bg-white/10" data-tab="map"><i class="fas fa-map-marked-alt mr-1"></i>Map</button>
+<button onclick="sw('map')" class="nt px-3 py-2.5 text-sm font-medium rounded-t-lg whitespace-nowrap transition hover:bg-white/10" data-tab="map"><i class="fas fa-map-marked-alt mr-1"></i>Field Map</button>
 <button onclick="sw('quality')" class="nt px-3 py-2.5 text-sm font-medium rounded-t-lg whitespace-nowrap transition hover:bg-white/10" data-tab="quality"><i class="fas fa-shield-alt mr-1"></i>Data Quality <span id="qb" class="ml-1 px-1.5 py-0.5 rounded-full text-xs font-bold bg-red-500 text-white hidden">0</span></button>
 <button onclick="sw('responses')" class="nt px-3 py-2.5 text-sm font-medium rounded-t-lg whitespace-nowrap transition hover:bg-white/10" data-tab="responses"><i class="fas fa-table mr-1"></i>Responses</button>
 </nav></div></header>
 
 <div id="loading" class="flex flex-col items-center justify-center py-20"><div class="loader mb-4"></div><p class="text-gray-500 font-medium">Fetching live data from ODK Central...</p></div>
 <div id="error" class="hidden max-w-7xl mx-auto px-4 py-10"><div class="bg-red-50 border border-red-200 rounded-xl p-6 text-center"><i class="fas fa-exclamation-triangle text-red-400 text-3xl mb-3"></i><h3 class="text-red-700 font-semibold text-lg">Failed to load data</h3><p class="text-red-500 mt-1" id="errMsg"></p><button onclick="refreshData()" class="mt-4 bg-red-600 text-white px-6 py-2 rounded-lg hover:bg-red-700">Retry</button></div></div>
+<div id="nodata" class="hidden max-w-7xl mx-auto px-4 py-10"><div class="bg-blue-50 border border-blue-200 rounded-xl p-8 text-center"><i class="fas fa-inbox text-blue-300 text-5xl mb-4"></i><h3 class="text-blue-700 font-semibold text-xl">No Submissions Yet</h3><p class="text-blue-500 mt-2">The questionnaire (Form v4) was recently updated. Data collection is in progress.</p><p class="text-blue-400 text-sm mt-3">The dashboard will auto-refresh every 2 minutes. Submissions will appear here as enumerators submit them.</p><button onclick="refreshData()" class="mt-6 bg-blue-600 text-white px-6 py-2 rounded-lg hover:bg-blue-700 font-semibold"><i class="fas fa-sync-alt mr-2"></i>Check Now</button></div></div>
 
 <main id="main" class="hidden max-w-7xl mx-auto px-4 sm:px-6 py-6">
 
@@ -726,9 +885,10 @@ body{font-family:'Inter',sans-serif}
 <div class="card bg-white rounded-xl p-5 shadow-sm border border-gray-100"><h3 class="text-sm font-semibold text-gray-700 mb-4"><i class="fas fa-graduation-cap text-blue-500 mr-2"></i>Education Level</h3><div class="chart-container" style="height:280px"><canvas id="c-edu"></canvas></div></div>
 <div class="card bg-white rounded-xl p-5 shadow-sm border border-gray-100"><h3 class="text-sm font-semibold text-gray-700 mb-4"><i class="fas fa-handshake text-teal-500 mr-2"></i>Ownership Structure</h3><div class="chart-container" style="height:280px"><canvas id="c-own"></canvas></div></div>
 </div>
-<div class="grid grid-cols-1 lg:grid-cols-2 gap-6">
+<div class="grid grid-cols-1 lg:grid-cols-3 gap-6">
 <div class="card bg-white rounded-xl p-5 shadow-sm border border-gray-100"><h3 class="text-sm font-semibold text-gray-700 mb-4"><i class="fas fa-wheelchair text-gray-500 mr-2"></i>Disability Status</h3><div class="chart-container" style="height:260px"><canvas id="c-dis"></canvas></div></div>
 <div class="card bg-white rounded-xl p-5 shadow-sm border border-gray-100"><h3 class="text-sm font-semibold text-gray-700 mb-4"><i class="fas fa-id-card text-green-500 mr-2"></i>Registration Status</h3><div class="chart-container" style="height:260px"><canvas id="c-reg"></canvas></div></div>
+<div class="card bg-white rounded-xl p-5 shadow-sm border border-gray-100"><h3 class="text-sm font-semibold text-gray-700 mb-4"><i class="fas fa-flag text-amber-500 mr-2"></i>Nationality</h3><div class="chart-container" style="height:260px"><canvas id="c-nat"></canvas></div></div>
 </div></div>
 
 <!-- ======= OPERATIONS ======= -->
@@ -738,14 +898,16 @@ body{font-family:'Inter',sans-serif}
 <div class="card bg-white rounded-xl p-5 shadow-sm border border-gray-100"><h3 class="text-sm font-semibold text-gray-700 mb-4"><i class="fas fa-people-group text-indigo-500 mr-2"></i>Employee Breakdown (Gender/Type)</h3><div class="chart-container" style="height:280px"><canvas id="c-empb"></canvas></div></div>
 </div>
 <div class="grid grid-cols-1 lg:grid-cols-3 gap-6 mb-6">
-<div class="card bg-white rounded-xl p-5 shadow-sm border border-gray-100"><h3 class="text-sm font-semibold text-gray-700 mb-4"><i class="fas fa-chart-line text-green-500 mr-2"></i>Employment Growth (3yr)</h3><div class="chart-container" style="height:260px"><canvas id="c-empg"></canvas></div></div>
+<div class="card bg-white rounded-xl p-5 shadow-sm border border-gray-100"><h3 class="text-sm font-semibold text-gray-700 mb-4"><i class="fas fa-chart-line text-green-500 mr-2"></i>Employment Growth</h3><div class="chart-container" style="height:260px"><canvas id="c-empg"></canvas></div></div>
 <div class="card bg-white rounded-xl p-5 shadow-sm border border-gray-100"><h3 class="text-sm font-semibold text-gray-700 mb-4"><i class="fas fa-store text-amber-500 mr-2"></i>Business Premises</h3><div class="chart-container" style="height:260px"><canvas id="c-prem"></canvas></div></div>
 <div class="card bg-white rounded-xl p-5 shadow-sm border border-gray-100"><h3 class="text-sm font-semibold text-gray-700 mb-4"><i class="fas fa-bullseye text-red-500 mr-2"></i>Market Reach</h3><div class="chart-container" style="height:260px"><canvas id="c-reach"></canvas></div></div>
 </div>
-<div class="grid grid-cols-1 lg:grid-cols-2 gap-6">
+<div class="grid grid-cols-1 lg:grid-cols-2 gap-6 mb-6">
 <div class="card bg-white rounded-xl p-5 shadow-sm border border-gray-100"><h3 class="text-sm font-semibold text-gray-700 mb-4"><i class="fas fa-bullhorn text-orange-500 mr-2"></i>Customer Channels</h3><div class="chart-container" style="height:280px"><canvas id="c-chan"></canvas></div></div>
 <div class="card bg-white rounded-xl p-5 shadow-sm border border-gray-100"><h3 class="text-sm font-semibold text-gray-700 mb-4"><i class="fas fa-truck text-purple-500 mr-2"></i>Sourcing Challenges</h3><div class="chart-container" style="height:280px"><canvas id="c-sourc"></canvas></div></div>
-</div></div>
+</div>
+<div class="card bg-white rounded-xl p-5 shadow-sm border border-gray-100"><h3 class="text-sm font-semibold text-gray-700 mb-4"><i class="fas fa-gauge-high text-cyan-500 mr-2"></i>Production Capacity</h3><div class="chart-container" style="height:220px"><canvas id="c-prod"></canvas></div></div>
+</div>
 
 <!-- ======= FINANCE ======= -->
 <div class="tab-content" id="tab-finance">
@@ -800,18 +962,22 @@ body{font-family:'Inter',sans-serif}
 <div class="card bg-white rounded-xl p-5 shadow-sm border border-gray-100"><h3 class="text-sm font-semibold text-gray-700 mb-4"><i class="fas fa-landmark text-amber-500 mr-2"></i>Support Programs Known</h3><div class="chart-container" style="height:280px"><canvas id="c-prog"></canvas></div></div>
 </div></div>
 
-<!-- ======= MAP ======= -->
+<!-- ======= FIELD MAP (ENHANCED) ======= -->
 <div class="tab-content" id="tab-map">
 <div class="card bg-white rounded-xl p-5 shadow-sm border border-gray-100 mb-6">
-<div class="flex items-center justify-between mb-4">
-<h3 class="text-sm font-semibold text-gray-700"><i class="fas fa-map-marked-alt text-sky-500 mr-2"></i>Business Locations &mdash; GPS Data Collection Points</h3>
-<div class="flex items-center gap-3 text-xs text-gray-500">
+<div class="flex flex-col sm:flex-row items-start sm:items-center justify-between mb-4 gap-3">
+<h3 class="text-sm font-semibold text-gray-700"><i class="fas fa-satellite text-sky-500 mr-2"></i>Field Enumerator Tracker &mdash; Live GPS Map</h3>
+<div class="flex items-center gap-3 text-xs text-gray-500 flex-wrap">
 <span class="flex items-center gap-1"><span class="w-3 h-3 rounded-full bg-sky-500 inline-block"></span> Mapped: <b id="map-ct">0</b></span>
-<span class="flex items-center gap-1"><span class="w-3 h-3 rounded-full bg-red-400 inline-block"></span> Missing GPS: <b id="map-miss">0</b></span>
+<span class="flex items-center gap-1"><span class="w-3 h-3 rounded-full bg-red-400 inline-block"></span> Missing: <b id="map-miss">0</b></span>
+<label class="flex items-center gap-1 cursor-pointer"><input type="checkbox" id="chk-trails" checked onchange="toggleTrails()" class="rounded border-gray-300"> Show Trails</label>
+<label class="flex items-center gap-1 cursor-pointer"><input type="checkbox" id="chk-transit" checked onchange="toggleTransit()" class="rounded border-gray-300"> Transit Detection</label>
 </div></div>
+<div class="mb-3" id="enu-filter"><span class="text-xs text-gray-500 font-medium mr-2"><i class="fas fa-filter mr-1"></i>Enumerators:</span><span id="enu-badges"></span></div>
 <div id="map"></div>
 <div class="mt-4 flex flex-wrap gap-2" id="map-legend"></div>
-<p class="text-xs text-gray-400 mt-3"><i class="fas fa-info-circle mr-1"></i>Markers are color-coded by business sector. Click a marker for details. Businesses without GPS are flagged in Data Quality tab.</p>
+<div class="mt-3 grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3" id="map-stats"></div>
+<p class="text-xs text-gray-400 mt-3"><i class="fas fa-info-circle mr-1"></i>Zoom to street level to see enumerators in the field. Dashed lines show movement between survey locations. Blue pulse = actively submitting. Red dashes = long transit (possible issue).</p>
 </div></div>
 
 <!-- ======= DATA QUALITY ======= -->
@@ -825,24 +991,26 @@ body{font-family:'Inter',sans-serif}
 <div class="grid grid-cols-1 lg:grid-cols-3 gap-6 mb-6">
 <div class="card bg-white rounded-xl p-5 shadow-sm border border-gray-100"><h3 class="text-sm font-semibold text-gray-700 mb-4"><i class="fas fa-chart-pie text-red-500 mr-2"></i>Issues by Type</h3><div class="chart-container" style="height:260px"><canvas id="c-qt"></canvas></div></div>
 <div class="lg:col-span-2 card bg-white rounded-xl p-5 shadow-sm border border-gray-100">
-<h3 class="text-sm font-semibold text-gray-700 mb-3"><i class="fas fa-lightbulb text-yellow-500 mr-2"></i>16 Automated Quality Checks</h3>
+<h3 class="text-sm font-semibold text-gray-700 mb-3"><i class="fas fa-lightbulb text-yellow-500 mr-2"></i>18 Automated Quality Checks (v4)</h3>
 <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-2 text-xs">
 <div class="flex gap-1 items-start p-2 bg-red-50 rounded-lg"><i class="fas fa-copy text-red-400 mt-0.5"></i><div><b class="text-red-700">Duplicate</b><br><span class="text-gray-500">Same business in same ward</span></div></div>
 <div class="flex gap-1 items-start p-2 bg-red-50 rounded-lg"><i class="fas fa-bolt text-red-400 mt-0.5"></i><div><b class="text-red-700">Rushed</b><br><span class="text-gray-500">&lt;3 min for 80+ fields</span></div></div>
 <div class="flex gap-1 items-start p-2 bg-red-50 rounded-lg"><i class="fas fa-ban text-red-400 mt-0.5"></i><div><b class="text-red-700">No Consent</b><br><span class="text-gray-500">Respondent declined</span></div></div>
-<div class="flex gap-1 items-start p-2 bg-red-50 rounded-lg"><i class="fas fa-database text-red-400 mt-0.5"></i><div><b class="text-red-700">Employee Error</b><br><span class="text-gray-500">Negative or &gt;500, sum mismatch</span></div></div>
-<div class="flex gap-1 items-start p-2 bg-red-50 rounded-lg"><i class="fas fa-not-equal text-red-400 mt-0.5"></i><div><b class="text-red-700">Logical</b><br><span class="text-gray-500">6 contradiction checks</span></div></div>
+<div class="flex gap-1 items-start p-2 bg-red-50 rounded-lg"><i class="fas fa-database text-red-400 mt-0.5"></i><div><b class="text-red-700">Employee Error</b><br><span class="text-gray-500">Negative, &gt;500, sum mismatch</span></div></div>
+<div class="flex gap-1 items-start p-2 bg-red-50 rounded-lg"><i class="fas fa-not-equal text-red-400 mt-0.5"></i><div><b class="text-red-700">Logical</b><br><span class="text-gray-500">10 contradiction checks</span></div></div>
 <div class="flex gap-1 items-start p-2 bg-amber-50 rounded-lg"><i class="fas fa-user-clock text-amber-400 mt-0.5"></i><div><b class="text-amber-700">Age Outlier</b><br><span class="text-gray-500">Outside 16-90</span></div></div>
 <div class="flex gap-1 items-start p-2 bg-amber-50 rounded-lg"><i class="fas fa-calendar text-amber-400 mt-0.5"></i><div><b class="text-amber-700">Year Outlier</b><br><span class="text-gray-500">Before 1950 or future</span></div></div>
-<div class="flex gap-1 items-start p-2 bg-amber-50 rounded-lg"><i class="fas fa-question-circle text-amber-400 mt-0.5"></i><div><b class="text-amber-700">Missing Field</b><br><span class="text-gray-500">16 critical fields checked</span></div></div>
+<div class="flex gap-1 items-start p-2 bg-amber-50 rounded-lg"><i class="fas fa-question-circle text-amber-400 mt-0.5"></i><div><b class="text-amber-700">Missing Field</b><br><span class="text-gray-500">18 critical fields checked</span></div></div>
 <div class="flex gap-1 items-start p-2 bg-amber-50 rounded-lg"><i class="fas fa-map-pin text-amber-400 mt-0.5"></i><div><b class="text-amber-700">Missing GPS</b><br><span class="text-gray-500">No location captured</span></div></div>
 <div class="flex gap-1 items-start p-2 bg-amber-50 rounded-lg"><i class="fas fa-dollar-sign text-amber-400 mt-0.5"></i><div><b class="text-amber-700">Revenue Error</b><br><span class="text-gray-500">Cost exceeds revenue</span></div></div>
-<div class="flex gap-1 items-start p-2 bg-amber-50 rounded-lg"><i class="fas fa-file-excel text-amber-400 mt-0.5"></i><div><b class="text-amber-700">Empty Section</b><br><span class="text-gray-500">5 sections monitored</span></div></div>
+<div class="flex gap-1 items-start p-2 bg-amber-50 rounded-lg"><i class="fas fa-file-excel text-amber-400 mt-0.5"></i><div><b class="text-amber-700">Empty Section</b><br><span class="text-gray-500">7 sections monitored</span></div></div>
+<div class="flex gap-1 items-start p-2 bg-amber-50 rounded-lg"><i class="fas fa-gauge text-amber-400 mt-0.5"></i><div><b class="text-amber-700">Production</b><br><span class="text-gray-500">Capacity contradictions</span></div></div>
 <div class="flex gap-1 items-start p-2 bg-green-50 rounded-lg"><i class="fas fa-phone text-green-400 mt-0.5"></i><div><b class="text-green-700">Phone Format</b><br><span class="text-gray-500">Unusual digit count</span></div></div>
 <div class="flex gap-1 items-start p-2 bg-green-50 rounded-lg"><i class="fas fa-clock text-green-400 mt-0.5"></i><div><b class="text-green-700">Hours Outlier</b><br><span class="text-gray-500">Invalid days/hours</span></div></div>
 <div class="flex gap-1 items-start p-2 bg-green-50 rounded-lg"><i class="fas fa-hourglass text-green-400 mt-0.5"></i><div><b class="text-green-700">Long Duration</b><br><span class="text-gray-500">&gt;3 hours open</span></div></div>
-<div class="flex gap-1 items-start p-2 bg-green-50 rounded-lg"><i class="fas fa-robot text-green-400 mt-0.5"></i><div><b class="text-green-700">Suspicious</b><br><span class="text-gray-500">All multi-select = 1 option</span></div></div>
+<div class="flex gap-1 items-start p-2 bg-green-50 rounded-lg"><i class="fas fa-robot text-green-400 mt-0.5"></i><div><b class="text-green-700">Suspicious</b><br><span class="text-gray-500">All rank = 1 option</span></div></div>
 <div class="flex gap-1 items-start p-2 bg-green-50 rounded-lg"><i class="fas fa-id-badge text-green-400 mt-0.5"></i><div><b class="text-green-700">TIN Format</b><br><span class="text-gray-500">Unusual TIN format</span></div></div>
+<div class="flex gap-1 items-start p-2 bg-green-50 rounded-lg"><i class="fas fa-crosshairs text-green-400 mt-0.5"></i><div><b class="text-green-700">GPS Accuracy</b><br><span class="text-gray-500">&gt;100m accuracy</span></div></div>
 </div></div></div>
 <div class="card bg-white rounded-xl p-4 shadow-sm border border-gray-100 mb-4">
 <div class="flex flex-wrap items-center gap-3">
@@ -854,7 +1022,7 @@ body{font-family:'Inter',sans-serif}
 <span class="ml-auto text-xs text-gray-400" id="q-lbl"></span>
 </div></div>
 <div id="q-list" class="space-y-3"></div>
-<div id="q-clean" class="hidden text-center py-16"><i class="fas fa-check-circle text-green-400 text-5xl mb-4"></i><h3 class="text-lg font-semibold text-gray-700">All Data Looks Clean!</h3><p class="text-gray-400">No issues detected across 16 automated checks.</p></div>
+<div id="q-clean" class="hidden text-center py-16"><i class="fas fa-check-circle text-green-400 text-5xl mb-4"></i><h3 class="text-lg font-semibold text-gray-700">All Data Looks Clean!</h3><p class="text-gray-400">No issues detected across 18 automated checks.</p></div>
 </div>
 
 <!-- ======= RESPONSES ======= -->
@@ -873,22 +1041,23 @@ body{font-family:'Inter',sans-serif}
 <th class="text-left py-3 px-2 font-semibold text-gray-600">Gender</th>
 <th class="text-left py-3 px-2 font-semibold text-gray-600">Emp</th>
 <th class="text-left py-3 px-2 font-semibold text-gray-600">Revenue</th>
-<th class="text-left py-3 px-2 font-semibold text-gray-600">Registration</th>
+<th class="text-left py-3 px-2 font-semibold text-gray-600">GPS</th>
 <th class="text-left py-3 px-2 font-semibold text-gray-600">Date</th>
 <th class="text-left py-3 px-2 font-semibold text-gray-600">Submitted By</th>
 </tr></thead><tbody id="rtb"></tbody></table></div></div></div>
 
-<footer class="text-center py-6 mt-8 border-t border-gray-200"><p class="text-xs text-gray-400"><i class="fas fa-database mr-1"></i>ODK Central &bull; <span id="lu">-</span> &bull; Mukono Business Profiling &copy; 2026</p></footer>
+<footer class="text-center py-6 mt-8 border-t border-gray-200"><p class="text-xs text-gray-400"><i class="fas fa-database mr-1"></i>ODK Central (Form v4) &bull; <span id="lu">-</span> &bull; Mukono Business Profiling &copy; 2026</p></footer>
 </main>
 
 <script>
 Chart.register(ChartDataLabels);
-let CH={},S=null,QD=null,CF='all',LM=null,MK=[];
+let CH={},S=null,QD=null,CF='all',LM=null,MK=[],TL=[],TM=[],showTrails=true,showTransit=true,activeEnu='all';
 const P=['#0369a1','#059669','#d97706','#dc2626','#7c3aed','#0891b2','#db2777','#0d9488','#ea580c','#4f46e5','#16a34a','#b91c1c','#7e22ce','#0284c7','#65a30d','#be185d'];
+const EC=['#e11d48','#0369a1','#059669','#d97706','#7c3aed','#0891b2','#ea580c','#16a34a','#6366f1','#f59e0b'];
 
-function sw(t){document.querySelectorAll('.tab-content').forEach(e=>e.classList.remove('active'));document.querySelectorAll('.nt').forEach(e=>{e.classList.remove('nav-active');e.classList.add('hover:bg-white/10')});document.getElementById('tab-'+t).classList.add('active');const b=document.querySelector('[data-tab="'+t+'"]');b.classList.add('nav-active');b.classList.remove('hover:bg-white/10');if(t==='map'&&LM)setTimeout(()=>LM.invalidateSize(),100)}
+function sw(t){document.querySelectorAll('.tab-content').forEach(e=>e.classList.remove('active'));document.querySelectorAll('.nt').forEach(e=>{e.classList.remove('nav-active');e.classList.add('hover:bg-white/10')});document.getElementById('tab-'+t).classList.add('active');const b=document.querySelector('[data-tab="'+t+'"]');b.classList.add('nav-active');b.classList.remove('hover:bg-white/10');if(t==='map'&&LM)setTimeout(()=>{LM.invalidateSize();if(S)fitMapBounds()},200)}
 
-async function refreshData(){const ic=document.getElementById('rfIcon');ic.classList.add('fa-spin');try{const[s,q]=await Promise.all([fetch('/api/stats').then(r=>r.json()),fetch('/api/quality').then(r=>r.json())]);if(!s.success)throw new Error(s.error);if(!q.success)throw new Error(q.error);S=s.stats;QD=q;render(S);renderQ(q);document.getElementById('loading').classList.add('hidden');document.getElementById('error').classList.add('hidden');document.getElementById('main').classList.remove('hidden')}catch(e){document.getElementById('loading').classList.add('hidden');document.getElementById('error').classList.remove('hidden');document.getElementById('errMsg').textContent=e.message;document.getElementById('main').classList.add('hidden')}setTimeout(()=>ic.classList.remove('fa-spin'),500)}
+async function refreshData(){const ic=document.getElementById('rfIcon');ic.classList.add('fa-spin');try{const[s,q]=await Promise.all([fetch('/api/stats').then(r=>r.json()),fetch('/api/quality').then(r=>r.json())]);if(!s.success)throw new Error(s.error);if(!q.success)throw new Error(q.error);S=s.stats;QD=q;document.getElementById('loading').classList.add('hidden');document.getElementById('error').classList.add('hidden');if(s.stats.total===0){document.getElementById('nodata').classList.remove('hidden');document.getElementById('main').classList.add('hidden')}else{document.getElementById('nodata').classList.add('hidden');document.getElementById('main').classList.remove('hidden');render(S);renderQ(q)}}catch(e){document.getElementById('loading').classList.add('hidden');document.getElementById('error').classList.remove('hidden');document.getElementById('errMsg').textContent=e.message;document.getElementById('main').classList.add('hidden');document.getElementById('nodata').classList.add('hidden')}setTimeout(()=>ic.classList.remove('fa-spin'),500)}
 
 async function downloadExcel(){const b=document.getElementById('dlBtn');b.innerHTML='<i class="fas fa-spinner fa-spin"></i>';b.disabled=true;try{const r=await fetch('/api/export');const d=await r.json();if(!d.success)throw new Error(d.error);const ws=XLSX.utils.json_to_sheet(d.rows);const wb=XLSX.utils.book_new();XLSX.utils.book_append_sheet(wb,ws,'Business Profiling');ws['!cols']=Object.keys(d.rows[0]||{}).map(k=>({wch:Math.min(Math.max(k.length+2,12),40)}));XLSX.writeFile(wb,'Mukono_Business_Profiling_'+new Date().toISOString().split('T')[0]+'.xlsx')}catch(e){alert('Failed: '+e.message)}b.innerHTML='<i class="fas fa-file-excel"></i> Excel';b.disabled=false}
 
@@ -903,29 +1072,103 @@ function mkLine(id,data){dc(id);const l=Object.keys(data),v=Object.values(data),
 
 function mkRadar(id,data){dc(id);const l=Object.keys(data),v=Object.values(data);CH[id]=new Chart(document.getElementById(id),{type:'radar',data:{labels:l,datasets:[{label:'Avg Score',data:v,backgroundColor:'rgba(3,105,161,.15)',borderColor:'#0369a1',borderWidth:2,pointBackgroundColor:'#0369a1',pointRadius:4}]},options:{responsive:true,maintainAspectRatio:false,plugins:{legend:{display:false},datalabels:{color:'#0369a1',font:{size:11,weight:'bold'},anchor:'end',align:'end',formatter:v=>v>0?v:''}},scales:{r:{min:0,max:5,ticks:{stepSize:1,font:{size:9}},pointLabels:{font:{size:10}}}}}})}
 
-function mkGroupBar(id,data,vert){dc(id);const labels=Object.keys(data);const allCats=new Set();for(const ward of labels)for(const cat of Object.keys(data[ward]))allCats.add(cat);const cats=[...allCats];const datasets=cats.map((c,i)=>({label:c,data:labels.map(l=>data[l][c]||0),backgroundColor:P[i%P.length],borderRadius:4}));CH[id]=new Chart(document.getElementById(id),{type:'bar',data:{labels,datasets},options:{indexAxis:vert?'y':'x',responsive:true,maintainAspectRatio:false,plugins:{legend:{labels:{boxWidth:12,font:{size:9}}},datalabels:{display:false}},scales:{x:{stacked:true,ticks:{font:{size:9}}},y:{stacked:true,beginAtZero:true,ticks:{precision:0,font:{size:9}}}}}})}
+const sectorColors={Retail:'#dc2626',Wholesale:'#d97706',Manufacturing:'#059669','ICT & Telecom':'#7c3aed','Professional Services':'#db2777','Accommodation & Food':'#0891b2',Agribusiness:'#16a34a','Construction & Real Estate':'#ea580c','Health & Social':'#0d9488','Transport & Storage':'#4f46e5',Education:'#65a30d','Financial Services':'#b91c1c','Mechanical & Repair':'#7e22ce','Import/Export':'#0284c7','Recreation & Personal':'#be185d',Other:'#6b7280'};
 
-const sectorColors={Retail:'#dc2626',Wholesale:'#d97706',Manufacturing:'#059669','ICT & Telecom':'#7c3aed','Professional Services':'#db2777','Accommodation & Food':'#0891b2',Agribusiness:'#16a34a',Construction:'#ea580c',Health:'#0d9488',Transport:'#4f46e5',Education:'#65a30d',Other:'#6b7280'};
+function haversine(lat1,lon1,lat2,lon2){const R=6371e3,p=Math.PI/180,a=Math.sin((lat2-lat1)*p/2)**2+Math.cos(lat1*p)*Math.cos(lat2*p)*Math.sin((lon2-lon1)*p/2)**2;return R*2*Math.atan2(Math.sqrt(a),Math.sqrt(1-a))}
 
-function initMap(points,total){
-if(!LM){LM=L.map('map',{scrollWheelZoom:true}).setView([0.35,32.62],12);L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png',{attribution:'&copy; OpenStreetMap',maxZoom:18}).addTo(LM)}
-MK.forEach(m=>LM.removeLayer(m));MK=[];
-document.getElementById('map-ct').textContent=points.length;
-document.getElementById('map-miss').textContent=total-points.length;
+function toggleTrails(){showTrails=document.getElementById('chk-trails').checked;if(S)initMap(S.gps_points,S.total,S.enumerator_trails)}
+function toggleTransit(){showTransit=document.getElementById('chk-transit').checked;if(S)initMap(S.gps_points,S.total,S.enumerator_trails)}
+function filterEnu(name){activeEnu=activeEnu===name?'all':name;document.querySelectorAll('.enu-badge').forEach(b=>{b.classList.toggle('active',b.dataset.enu===activeEnu||activeEnu==='all')});if(S)initMap(S.gps_points,S.total,S.enumerator_trails)}
 
-if(!points.length){LM.setView([0.35,32.62],12);return}
-const bounds=[];const usedSectors=new Set();
-for(const p of points){
-  const color=sectorColors[p.sector]||'#6b7280';
-  usedSectors.add(p.sector);
-  const m=L.circleMarker([p.lat,p.lon],{radius:9,fillColor:color,color:'#fff',weight:2.5,fillOpacity:.85}).addTo(LM);
-  m.bindPopup('<div class="text-sm" style="min-width:180px"><b class="text-base">'+esc(p.business)+'</b><br><span class="text-gray-500">'+esc(p.sector)+'</span><hr style="margin:4px 0"><i class="fas fa-user text-gray-400 mr-1"></i>'+esc(p.owner)+'<br><i class="fas fa-map-marker text-gray-400 mr-1"></i>'+esc(p.ward)+', '+esc(p.division)+'<br><span class="text-xs text-gray-400">GPS Accuracy: &plusmn;'+Math.round(p.accuracy)+'m</span></div>');
-  MK.push(m);bounds.push([p.lat,p.lon])
+function fitMapBounds(){
+  const allPts=S.gps_points.filter(p=>activeEnu==='all'||p.enumerator===activeEnu);
+  if(allPts.length>0){const bounds=allPts.map(p=>[p.lat,p.lon]);if(bounds.length===1)LM.setView(bounds[0],17);else LM.fitBounds(bounds,{padding:[50,50],maxZoom:17})}
+  else LM.setView([0.35,32.62],13)
 }
-if(bounds.length>0){if(bounds.length===1)LM.setView(bounds[0],15);else LM.fitBounds(bounds,{padding:[40,40]})}
 
-const leg=document.getElementById('map-legend');
-leg.innerHTML=[...usedSectors].map(s=>'<span class="flex items-center gap-1 text-xs bg-white px-2 py-1 rounded-full border"><span class="w-3 h-3 rounded-full inline-block" style="background:'+(sectorColors[s]||'#6b7280')+'"></span>'+esc(s)+'</span>').join('')
+function initMap(points,total,trails){
+  if(!LM){LM=L.map('map',{scrollWheelZoom:true,zoomControl:true}).setView([0.35,32.62],14);
+    L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png',{attribution:'&copy; OSM',maxZoom:19}).addTo(LM);
+    L.control.scale({metric:true,imperial:false}).addTo(LM)}
+  MK.forEach(m=>LM.removeLayer(m));MK=[];
+  TL.forEach(t=>LM.removeLayer(t));TL=[];
+  TM.forEach(t=>LM.removeLayer(t));TM=[];
+
+  const filteredPts=activeEnu==='all'?points:points.filter(p=>p.enumerator===activeEnu);
+  document.getElementById('map-ct').textContent=filteredPts.length;
+  document.getElementById('map-miss').textContent=total-points.length;
+
+  // Enumerator badges
+  const enuNames=[...new Set(points.map(p=>p.enumerator))];
+  document.getElementById('enu-badges').innerHTML='<span class="enu-badge '+(activeEnu==='all'?'active':'')+' bg-gray-200 text-gray-700" data-enu="all" onclick="filterEnu(\\'all\\')"><i class="fas fa-users"></i> All</span> '+enuNames.map((n,i)=>'<span class="enu-badge '+(activeEnu===n?'active':'')+'" style="background:'+EC[i%EC.length]+'20;color:'+EC[i%EC.length]+'" data-enu="'+esc(n)+'" onclick="filterEnu(\\''+esc(n)+'\\')"><span class="w-2 h-2 rounded-full inline-block" style="background:'+EC[i%EC.length]+'"></span>'+esc(n)+' ('+points.filter(p=>p.enumerator===n).length+')</span>').join(' ');
+
+  if(!filteredPts.length){fitMapBounds();return}
+  const usedSectors=new Set();const bounds=[];
+
+  // Draw enumerator trails (GPS movement paths)
+  if(showTrails && trails){
+    const enuList=activeEnu==='all'?Object.keys(trails):[activeEnu];
+    enuList.forEach((enu,ei)=>{
+      const trail=trails[enu];if(!trail)return;
+      const gpsTrail=trail.filter(t=>t.lat&&t.lon).sort((a,b)=>a.sub_ts-b.sub_ts);
+      if(gpsTrail.length<2)return;
+      const color=EC[enuNames.indexOf(enu)%EC.length]||'#0369a1';
+      const latlngs=gpsTrail.map(t=>[t.lat,t.lon]);
+      const line=L.polyline(latlngs,{color:color,weight:3,opacity:0.6,dashArray:'8 4',className:'transit-line'}).addTo(LM);
+      line.bindPopup('<div class="text-xs"><b>'+esc(enu)+'</b><br>Route: '+gpsTrail.length+' stops<br>'+gpsTrail.map(t=>esc(t.business)).join(' &rarr; ')+'</div>');
+      TL.push(line);
+
+      // Transit detection: flag long gaps
+      if(showTransit){
+        for(let i=1;i<gpsTrail.length;i++){
+          const dist=haversine(gpsTrail[i-1].lat,gpsTrail[i-1].lon,gpsTrail[i].lat,gpsTrail[i].lon);
+          const timeDiff=(gpsTrail[i].sub_ts-gpsTrail[i-1].sub_ts)/60000;
+          const isTransit=dist>2000||timeDiff>120;
+          if(isTransit){
+            const midLat=(gpsTrail[i-1].lat+gpsTrail[i].lat)/2;
+            const midLon=(gpsTrail[i-1].lon+gpsTrail[i].lon)/2;
+            const transitLine=L.polyline([[gpsTrail[i-1].lat,gpsTrail[i-1].lon],[gpsTrail[i].lat,gpsTrail[i].lon]],{color:'#dc2626',weight:4,opacity:0.8,dashArray:'12 6'}).addTo(LM);
+            transitLine.bindPopup('<div class="text-xs"><b style="color:#dc2626"><i class="fas fa-car"></i> Transit Detected</b><br><b>'+esc(enu)+'</b><br>Distance: '+(dist/1000).toFixed(1)+'km<br>Time gap: '+Math.round(timeDiff)+' min<br>From: '+esc(gpsTrail[i-1].business)+'<br>To: '+esc(gpsTrail[i].business)+'</div>');
+            TM.push(transitLine);
+            const icon=L.divIcon({className:'',html:'<div style="background:#dc2626;color:white;border-radius:50%;width:22px;height:22px;display:flex;align-items:center;justify-content:center;font-size:10px;border:2px solid white;box-shadow:0 2px 6px rgba(0,0,0,.3)"><i class="fas fa-car"></i></div>',iconSize:[22,22],iconAnchor:[11,11]});
+            const tm=L.marker([midLat,midLon],{icon}).addTo(LM);
+            tm.bindPopup(transitLine.getPopup());
+            TM.push(tm)
+          }
+        }
+      }
+    })
+  }
+
+  // Draw business markers
+  for(const p of filteredPts){
+    const color=sectorColors[p.sector]||'#6b7280';
+    usedSectors.add(p.sector);
+    const enuColor=EC[enuNames.indexOf(p.enumerator)%EC.length]||'#6b7280';
+    const isRecent=(Date.now()-p.sub_ts)<3600000;
+
+    const m=L.circleMarker([p.lat,p.lon],{radius:isRecent?11:9,fillColor:color,color:isRecent?enuColor:'#fff',weight:isRecent?3:2.5,fillOpacity:.85}).addTo(LM);
+    const timeStr=p.start_time?new Date(p.start_time).toLocaleTimeString([],{hour:'2-digit',minute:'2-digit'}):'';
+    const endStr=p.end_time?new Date(p.end_time).toLocaleTimeString([],{hour:'2-digit',minute:'2-digit'}):'';
+    m.bindPopup('<div class="text-sm" style="min-width:220px"><b class="text-base">'+esc(p.business)+'</b><br><span style="color:'+color+'" class="font-semibold text-xs">'+esc(p.sector)+'</span><hr style="margin:6px 0"><i class="fas fa-user text-gray-400 mr-1"></i>'+esc(p.owner)+'<br><i class="fas fa-map-marker text-gray-400 mr-1"></i>'+esc(p.ward)+', '+esc(p.division)+'<br><i class="fas fa-clock text-gray-400 mr-1"></i>'+timeStr+(endStr?' &rarr; '+endStr:'')+'<br><i class="fas fa-user-tie mr-1" style="color:'+enuColor+'"></i><span style="color:'+enuColor+'" class="font-semibold">'+esc(p.enumerator)+'</span><br><span class="text-xs text-gray-400">GPS: &plusmn;'+Math.round(p.accuracy)+'m | Alt: '+Math.round(p.altitude)+'m</span>'+(isRecent?'<br><span class="text-xs text-green-600 font-bold"><i class="fas fa-circle fa-beat-fade mr-1"></i>Recent (within 1hr)</span>':'')+'</div>');
+    MK.push(m);bounds.push([p.lat,p.lon])
+  }
+  if(bounds.length>0){if(bounds.length===1)LM.setView(bounds[0],17);else LM.fitBounds(bounds,{padding:[50,50],maxZoom:17})}
+
+  const leg=document.getElementById('map-legend');
+  leg.innerHTML=[...usedSectors].map(s=>'<span class="flex items-center gap-1 text-xs bg-white px-2 py-1 rounded-full border"><span class="w-3 h-3 rounded-full inline-block" style="background:'+(sectorColors[s]||'#6b7280')+'"></span>'+esc(s)+'</span>').join('');
+
+  // Map stats cards
+  const statsDiv=document.getElementById('map-stats');
+  const avgAcc=filteredPts.length>0?Math.round(filteredPts.reduce((s,p)=>s+p.accuracy,0)/filteredPts.length):0;
+  const recentCount=filteredPts.filter(p=>(Date.now()-p.sub_ts)<3600000).length;
+  const transitCount=TM.filter(t=>t instanceof L.Marker).length;
+  statsDiv.innerHTML=[
+    {icon:'fa-satellite-dish',label:'Avg Accuracy',value:avgAcc+'m',color:avgAcc<50?'text-green-600':avgAcc<100?'text-amber-600':'text-red-600'},
+    {icon:'fa-clock',label:'Recent (<1hr)',value:recentCount,color:recentCount>0?'text-green-600':'text-gray-400'},
+    {icon:'fa-car',label:'Transit Detected',value:transitCount,color:transitCount>0?'text-red-600':'text-green-600'},
+    {icon:'fa-route',label:'Trails Shown',value:TL.length,color:'text-blue-600'}
+  ].map(s=>'<div class="bg-gray-50 rounded-lg p-3 text-center"><i class="fas '+s.icon+' text-gray-400 mb-1"></i><div class="text-lg font-bold '+s.color+'">'+s.value+'</div><div class="text-xs text-gray-400">'+s.label+'</div></div>').join('')
 }
 
 function render(s){
@@ -943,33 +1186,24 @@ else if(dq.total_issues>0){ie.className='stat-number text-3xl font-bold text-amb
 else{ie.className='stat-number text-3xl font-bold text-green-600';document.getElementById('k-iss-d').textContent='All clean!';document.getElementById('k-iss-d').className='text-xs mt-1 text-green-400'}
 const bd=document.getElementById('qb');if(dq.total_issues>0){bd.textContent=dq.total_issues;bd.classList.remove('hidden')}else bd.classList.add('hidden')
 
-// Overview charts
 mkLine('c-tl',s.timeline);mkBar('c-sec',fz(s.sector),true);mkBar('c-ward',fz(s.ward_distribution),true);mkDoughnut('c-legal',fz(s.legal_status));mkBar('c-enum',s.enumerators,true);
 
-// Demographics
-mkDoughnut('c-gen',fz(s.gender));mkBar('c-age',s.age_groups);mkBar('c-edu',fz(s.education),true);mkDoughnut('c-own',fz(s.ownership));mkDoughnut('c-dis',fz(s.disability));mkDoughnut('c-reg',fz(s.registration));
+mkDoughnut('c-gen',fz(s.gender));mkBar('c-age',s.age_groups);mkBar('c-edu',fz(s.education),true);mkDoughnut('c-own',fz(s.ownership));mkDoughnut('c-dis',fz(s.disability));mkDoughnut('c-reg',fz(s.registration));mkDoughnut('c-nat',fz(s.nationality));
 
-// Operations
-mkDoughnut('c-size',s.size_categories);mkBar('c-empb',s.employee_breakdown);mkBar('c-empg',fz(s.emp_growth),true);mkDoughnut('c-prem',fz(s.premises));mkDoughnut('c-reach',fz(s.market_reach));mkBar('c-chan',fz(s.customer_channels),true);mkBar('c-sourc',fz(s.sourcing_challenges),true);
+mkDoughnut('c-size',s.size_categories);mkBar('c-empb',s.employee_breakdown);mkBar('c-empg',fz(s.emp_growth),true);mkDoughnut('c-prem',fz(s.premises));mkDoughnut('c-reach',fz(s.market_reach));mkBar('c-chan',fz(s.customer_channels),true);mkBar('c-sourc',fz(s.sourcing_challenges),true);mkDoughnut('c-prod',fz(s.production));
 
-// Finance
 mkBar('c-rev',fz(s.revenue),true);mkDoughnut('c-revt',fz(s.revenue_trend));mkDoughnut('c-cap',fz(s.capital_sources));mkDoughnut('c-loan',fz(s.loan_status));mkDoughnut('c-fin',fz(s.fin_records));mkBar('c-lbar',fz(s.loan_barriers),true);
-// Tax composite
-dc('c-tax');CH['c-tax']=new Chart(document.getElementById('c-tax'),{type:'bar',data:{labels:['Trading Licence','Pays Taxes'],datasets:[{label:'Yes',data:[s.trading_licence['Yes']||0,s.pays_taxes['Yes']||0],backgroundColor:'#059669',borderRadius:4},{label:'No',data:[s.trading_licence['No']||0,s.pays_taxes['No']||0],backgroundColor:'#dc2626',borderRadius:4}]},options:{responsive:true,maintainAspectRatio:false,plugins:{legend:{labels:{boxWidth:12,font:{size:10}}},datalabels:{color:'#fff',font:{size:11,weight:'bold'},formatter:v=>v>0?v:''}},scales:{x:{ticks:{font:{size:10}}},y:{beginAtZero:true,ticks:{precision:0}}}}});
+dc('c-tax');CH['c-tax']=new Chart(document.getElementById('c-tax'),{type:'bar',data:{labels:['Trading Licence','Pays Taxes','Tax Incentives'],datasets:[{label:'Yes',data:[s.trading_licence['Yes']||0,s.pays_taxes['Yes']||0,s.receives_tax_incentives['Yes']||0],backgroundColor:'#059669',borderRadius:4},{label:'No',data:[s.trading_licence['No']||0,s.pays_taxes['No']||0,s.receives_tax_incentives['No']||0],backgroundColor:'#dc2626',borderRadius:4}]},options:{responsive:true,maintainAspectRatio:false,plugins:{legend:{labels:{boxWidth:12,font:{size:10}}},datalabels:{color:'#fff',font:{size:11,weight:'bold'},formatter:v=>v>0?v:''}},scales:{x:{ticks:{font:{size:10}}},y:{beginAtZero:true,ticks:{precision:0}}}}});
 mkBar('c-inv',fz(s.investment_areas),true);
 
-// Digital & Infra
 mkDoughnut('c-dlit',fz(s.digital_literacy));mkBar('c-tech',fz(s.tech_used),true);mkBar('c-pay',fz(s.payment_methods),true);mkBar('c-dbar',fz(s.digital_barriers),true);mkBar('c-regenv',fz(s.regulatory));mkRadar('c-infra',s.infra_scores);mkBar('c-infrac',fz(s.infra_challenges),true);
 
-// Challenges
 mkBar('c-chal',fz(s.challenges),true);mkBar('c-mmcs',fz(s.mmc_support),true);mkBar('c-grow',fz(s.growth_opp),true);mkBar('c-train',fz(s.training_needs),true);mkBar('c-skill',fz(s.missing_skills),true);mkDoughnut('c-exp',fz(s.export_plans));mkBar('c-prog',fz(s.support_programs),true);
 
-// Map
-initMap(s.gps_points,s.total);
+initMap(s.gps_points,s.total,s.enumerator_trails);
 
-// Responses table
 const tb=document.getElementById('rtb');
-tb.innerHTML=s.businesses.map((b,i)=>'<tr class="border-b border-gray-100 hover:bg-gray-50"><td class="py-2 px-2 text-gray-400">'+(i+1)+'</td><td class="py-2 px-2 font-medium text-gray-800">'+esc(b.name)+'</td><td class="py-2 px-2"><span class="bg-sky-100 text-sky-700 px-2 py-0.5 rounded-full text-xs font-medium">'+esc(b.sector)+'</span></td><td class="py-2 px-2 text-gray-600 text-xs">'+esc(b.ward)+'</td><td class="py-2 px-2 text-gray-600">'+esc(b.owner)+'</td><td class="py-2 px-2 text-gray-600">'+esc(b.gender)+'</td><td class="py-2 px-2 text-gray-600">'+b.employees+'</td><td class="py-2 px-2"><span class="bg-green-100 text-green-700 px-2 py-0.5 rounded-full text-xs">'+esc(b.revenue)+'</span></td><td class="py-2 px-2"><span class="bg-amber-100 text-amber-700 px-2 py-0.5 rounded-full text-xs">'+esc(b.registration)+'</span></td><td class="py-2 px-2 text-gray-400 text-xs">'+(b.submitted?new Date(b.submitted).toLocaleDateString():'-')+'</td><td class="py-2 px-2"><span class="bg-purple-100 text-purple-700 px-2 py-0.5 rounded-full text-xs font-medium">'+esc(b.submitted_by)+'</span></td></tr>').join('')
+tb.innerHTML=s.businesses.map((b,i)=>'<tr class="border-b border-gray-100 hover:bg-gray-50"><td class="py-2 px-2 text-gray-400">'+(i+1)+'</td><td class="py-2 px-2 font-medium text-gray-800">'+esc(b.name)+'</td><td class="py-2 px-2"><span class="bg-sky-100 text-sky-700 px-2 py-0.5 rounded-full text-xs font-medium">'+esc(b.sector)+'</span></td><td class="py-2 px-2 text-gray-600 text-xs">'+esc(b.ward)+'</td><td class="py-2 px-2 text-gray-600">'+esc(b.owner)+'</td><td class="py-2 px-2 text-gray-600">'+esc(b.gender)+'</td><td class="py-2 px-2 text-gray-600">'+b.employees+'</td><td class="py-2 px-2"><span class="bg-green-100 text-green-700 px-2 py-0.5 rounded-full text-xs">'+esc(b.revenue)+'</span></td><td class="py-2 px-2">'+(b.has_gps?'<span class="text-green-600"><i class="fas fa-check-circle"></i></span>':'<span class="text-red-400"><i class="fas fa-times-circle"></i></span>')+'</td><td class="py-2 px-2 text-gray-400 text-xs">'+(b.submitted?new Date(b.submitted).toLocaleDateString():'-')+'</td><td class="py-2 px-2"><span class="bg-purple-100 text-purple-700 px-2 py-0.5 rounded-full text-xs font-medium">'+esc(b.submitted_by)+'</span></td></tr>').join('')
 }
 
 function renderQ(q){
@@ -987,7 +1221,7 @@ function fQ(sev){CF=sev;document.querySelectorAll('.qf').forEach(e=>{e.className
 function renderIssues(issues){const f=CF==='all'?issues:issues.filter(i=>i.severity===CF);document.getElementById('q-lbl').textContent='Showing '+f.length+' of '+issues.length;const c=document.getElementById('q-list');if(!f.length){c.innerHTML='<div class="text-center py-8 text-gray-400"><i class="fas fa-check-circle text-2xl mb-2"></i><p>No issues match this filter.</p></div>';return}
 c.innerHTML=f.map(i=>{const sc='severity-'+i.severity,bc='badge-'+i.severity,ic=i.severity==='high'?'fa-fire':i.severity==='medium'?'fa-exclamation-triangle':'fa-info-circle';return'<div class="card rounded-xl p-4 border-2 '+sc+'"><div class="flex flex-col sm:flex-row sm:items-center gap-2 mb-2"><div class="flex items-center gap-2"><span class="px-2 py-0.5 rounded-full text-xs font-bold '+bc+'"><i class="fas '+ic+' mr-1"></i>'+i.severity.toUpperCase()+'</span><span class="px-2 py-0.5 rounded-full text-xs font-semibold bg-gray-200 text-gray-700">'+esc(i.type)+'</span></div><span class="text-xs text-gray-400 sm:ml-auto"><i class="fas fa-building mr-1"></i>'+esc(i.business)+' &bull; '+i.submitted+' &bull; <i class="fas fa-user mr-1"></i>'+esc(i.enumerator)+'</span></div><p class="text-sm text-gray-700">'+esc(i.description)+'</p><p class="text-xs text-gray-400 mt-1"><i class="fas fa-tag mr-1"></i>Field: '+esc(i.field)+'</p></div>'}).join('')}
 
-function esc(s){if(!s)return'';return s.toString().replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;')}
+function esc(s){if(!s)return'';return s.toString().replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;').replace(/'/g,'&#39;')}
 
 refreshData();setInterval(refreshData,120000);
 </script></body></html>`
